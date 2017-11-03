@@ -4,7 +4,9 @@
  * Copyright (C) 2006 Linus Torvalds
  */
 #include "cache.h"
+#include "config.h"
 #include "builtin.h"
+#include "lockfile.h"
 #include "dir.h"
 #include "pathspec.h"
 #include "exec_cmd.h"
@@ -16,9 +18,10 @@
 #include "revision.h"
 #include "bulk-checkin.h"
 #include "argv-array.h"
+#include "submodule.h"
 
 static const char * const builtin_add_usage[] = {
-	N_("git add [options] [--] <pathspec>..."),
+	N_("git add [<options>] [--] <pathspec>..."),
 	NULL
 };
 static int patch_interactive, add_interactive, edit_interactive;
@@ -28,6 +31,21 @@ struct update_callback_data {
 	int flags;
 	int add_errors;
 };
+
+static void chmod_pathspec(struct pathspec *pathspec, char flip)
+{
+	int i;
+
+	for (i = 0; i < active_nr; i++) {
+		struct cache_entry *ce = active_cache[i];
+
+		if (pathspec && !ce_path_match(ce, pathspec, NULL))
+			continue;
+
+		if (chmod_cache_entry(ce, flip) < 0)
+			fprintf(stderr, "cannot chmod %cx '%s'\n", flip, ce->name);
+	}
+}
 
 static int fix_unmerged_status(struct diff_filepair *p,
 			       struct update_callback_data *data)
@@ -64,7 +82,7 @@ static void update_callback(struct diff_queue_struct *q,
 			die(_("unexpected diff status %c"), p->status);
 		case DIFF_STATUS_MODIFIED:
 		case DIFF_STATUS_TYPE_CHANGED:
-			if (add_file_to_index(&the_index, path, data->flags)) {
+			if (add_file_to_index(&the_index, path,	data->flags)) {
 				if (!(data->flags & ADD_CACHE_IGNORE_ERRORS))
 					die(_("updating files failed"));
 				data->add_errors++;
@@ -98,8 +116,10 @@ int add_files_to_cache(const char *prefix,
 	rev.diffopt.output_format = DIFF_FORMAT_CALLBACK;
 	rev.diffopt.format_callback = update_callback;
 	rev.diffopt.format_callback_data = &data;
+	rev.diffopt.flags |= DIFF_OPT_OVERRIDE_SUBMODULE_CONFIG;
 	rev.max_count = 0; /* do not compare unmerged paths with stage #2 */
 	run_diff_files(&rev, DIFF_RACY_IS_MODIFIED);
+	clear_pathspec(&rev.prune_data);
 	return !!data.add_errors;
 }
 
@@ -119,7 +139,7 @@ static char *prune_directory(struct dir_struct *dir, struct pathspec *pathspec, 
 			*dst++ = entry;
 	}
 	dir->nr = dst - dir->entries;
-	add_pathspec_matches_against_index(pathspec, seen);
+	add_pathspec_matches_against_index(pathspec, &the_index, seen);
 	return seen;
 }
 
@@ -180,7 +200,7 @@ static int edit_patch(int argc, const char **argv, const char *prefix)
 	char *file = git_pathdup("ADD_EDIT.patch");
 	const char *apply_argv[] = { "apply", "--recount", "--cached",
 		NULL, NULL };
-	struct child_process child;
+	struct child_process child = CHILD_PROCESS_INIT;
 	struct rev_info rev;
 	int out;
 	struct stat st;
@@ -207,14 +227,14 @@ static int edit_patch(int argc, const char **argv, const char *prefix)
 	if (run_diff_files(&rev, 0))
 		die(_("Could not write patch"));
 
-	launch_editor(file, NULL, NULL);
+	if (launch_editor(file, NULL, NULL))
+		die(_("editing patch failed"));
 
 	if (stat(file, &st))
 		die_errno(_("Could not stat '%s'"), file);
 	if (!st.st_size)
 		die(_("Empty patch. Aborted."));
 
-	memset(&child, 0, sizeof(child));
 	child.git_cmd = 1;
 	child.argv = apply_argv;
 	if (run_command(&child))
@@ -232,10 +252,13 @@ N_("The following paths are ignored by one of your .gitignore files:\n");
 
 static int verbose, show_only, ignored_too, refresh_only;
 static int ignore_add_errors, intent_to_add, ignore_missing;
+static int warn_on_embedded_repo = 1;
 
 #define ADDREMOVE_DEFAULT 1
 static int addremove = ADDREMOVE_DEFAULT;
 static int addremove_explicit = -1; /* unspecified */
+
+static char *chmod_arg;
 
 static int ignore_removal_cb(const struct option *opt, const char *arg, int unset)
 {
@@ -262,6 +285,9 @@ static struct option builtin_add_options[] = {
 	OPT_BOOL( 0 , "refresh", &refresh_only, N_("don't add, only refresh the index")),
 	OPT_BOOL( 0 , "ignore-errors", &ignore_add_errors, N_("just skip files which cannot be added because of errors")),
 	OPT_BOOL( 0 , "ignore-missing", &ignore_missing, N_("check if - even missing - files are ignored in dry run")),
+	OPT_STRING( 0 , "chmod", &chmod_arg, N_("(+/-)x"), N_("override the executable bit of the listed files")),
+	OPT_HIDDEN_BOOL(0, "warn-embedded-repo", &warn_on_embedded_repo,
+			N_("warn when adding an embedded repository")),
 	OPT_END(),
 };
 
@@ -275,6 +301,45 @@ static int add_config(const char *var, const char *value, void *cb)
 	return git_default_config(var, value, cb);
 }
 
+static const char embedded_advice[] = N_(
+"You've added another git repository inside your current repository.\n"
+"Clones of the outer repository will not contain the contents of\n"
+"the embedded repository and will not know how to obtain it.\n"
+"If you meant to add a submodule, use:\n"
+"\n"
+"	git submodule add <url> %s\n"
+"\n"
+"If you added this path by mistake, you can remove it from the\n"
+"index with:\n"
+"\n"
+"	git rm --cached %s\n"
+"\n"
+"See \"git help submodule\" for more information."
+);
+
+static void check_embedded_repo(const char *path)
+{
+	struct strbuf name = STRBUF_INIT;
+
+	if (!warn_on_embedded_repo)
+		return;
+	if (!ends_with(path, "/"))
+		return;
+
+	/* Drop trailing slash for aesthetics */
+	strbuf_addstr(&name, path);
+	strbuf_strip_suffix(&name, "/");
+
+	warning(_("adding embedded git repository: %s"), name.buf);
+	if (advice_add_embedded_repo) {
+		advise(embedded_advice, name.buf, name.buf);
+		/* there may be multiple entries; advise only once */
+		advice_add_embedded_repo = 0;
+	}
+
+	strbuf_release(&name);
+}
+
 static int add_files(struct dir_struct *dir, int flags)
 {
 	int i, exit_status = 0;
@@ -284,15 +349,17 @@ static int add_files(struct dir_struct *dir, int flags)
 		for (i = 0; i < dir->ignored_nr; i++)
 			fprintf(stderr, "%s\n", dir->ignored[i]->name);
 		fprintf(stderr, _("Use -f if you really want to add them.\n"));
-		die(_("no files added"));
+		exit_status = 1;
 	}
 
-	for (i = 0; i < dir->nr; i++)
-		if (add_file_to_cache(dir->entries[i]->name, flags)) {
+	for (i = 0; i < dir->nr; i++) {
+		check_embedded_repo(dir->entries[i]->name);
+		if (add_file_to_index(&the_index, dir->entries[i]->name, flags)) {
 			if (!ignore_add_errors)
 				die(_("adding files failed"));
 			exit_status = 1;
 		}
+	}
 	return exit_status;
 }
 
@@ -335,16 +402,14 @@ int cmd_add(int argc, const char **argv, const char *prefix)
 	if (!show_only && ignore_missing)
 		die(_("Option --ignore-missing can only be used together with --dry-run"));
 
-	if ((0 < addremove_explicit || take_worktree_changes) && !argc) {
-		static const char *whole[2] = { ":/", NULL };
-		argc = 1;
-		argv = whole;
-	}
+	if (chmod_arg && ((chmod_arg[0] != '-' && chmod_arg[0] != '+') ||
+			  chmod_arg[1] != 'x' || chmod_arg[2]))
+		die(_("--chmod param '%s' must be either -x or +x"), chmod_arg);
 
 	add_new_files = !take_worktree_changes && !refresh_only;
-	require_pathspec = !take_worktree_changes;
+	require_pathspec = !(take_worktree_changes || (0 < addremove_explicit));
 
-	hold_locked_index(&lock_file, 1);
+	hold_locked_index(&lock_file, LOCK_DIE_ON_ERROR);
 
 	flags = ((verbose ? ADD_CACHE_VERBOSE : 0) |
 		 (show_only ? ADD_CACHE_PRETEND : 0) |
@@ -362,19 +427,21 @@ int cmd_add(int argc, const char **argv, const char *prefix)
 	if (read_cache() < 0)
 		die(_("index file corrupt"));
 
+	die_in_unpopulated_submodule(&the_index, prefix);
+
 	/*
 	 * Check the "pathspec '%s' did not match any files" block
 	 * below before enabling new magic.
 	 */
 	parse_pathspec(&pathspec, 0,
 		       PATHSPEC_PREFER_FULL |
-		       PATHSPEC_SYMLINK_LEADING_PATH |
-		       PATHSPEC_STRIP_SUBMODULE_SLASH_EXPENSIVE,
+		       PATHSPEC_SYMLINK_LEADING_PATH,
 		       prefix, argv);
+
+	die_path_inside_submodule(&the_index, &pathspec);
 
 	if (add_new_files) {
 		int baselen;
-		struct pathspec empty_pathspec;
 
 		/* Set up the default git porcelain excludes */
 		memset(&dir, 0, sizeof(dir));
@@ -383,9 +450,8 @@ int cmd_add(int argc, const char **argv, const char *prefix)
 			setup_standard_excludes(&dir);
 		}
 
-		memset(&empty_pathspec, 0, sizeof(empty_pathspec));
 		/* This picks up the paths that are not tracked */
-		baselen = fill_directory(&dir, &pathspec);
+		baselen = fill_directory(&dir, &the_index, &pathspec);
 		if (pathspec.nr)
 			seen = prune_directory(&dir, &pathspec, baselen);
 	}
@@ -399,7 +465,7 @@ int cmd_add(int argc, const char **argv, const char *prefix)
 		int i;
 
 		if (!seen)
-			seen = find_pathspecs_matching_against_index(&pathspec);
+			seen = find_pathspecs_matching_against_index(&pathspec, &the_index);
 
 		/*
 		 * file_exists() assumes exact match
@@ -421,8 +487,9 @@ int cmd_add(int argc, const char **argv, const char *prefix)
 			     !file_exists(path))) {
 				if (ignore_missing) {
 					int dtype = DT_UNKNOWN;
-					if (is_excluded(&dir, path, &dtype))
-						dir_add_ignored(&dir, path, pathspec.items[i].len);
+					if (is_excluded(&dir, &the_index, path, &dtype))
+						dir_add_ignored(&dir, &the_index,
+								path, pathspec.items[i].len);
 				} else
 					die(_("pathspec '%s' did not match any files"),
 					    pathspec.items[i].original);
@@ -438,6 +505,8 @@ int cmd_add(int argc, const char **argv, const char *prefix)
 	if (add_new_files)
 		exit_status |= add_files(&dir, flags);
 
+	if (chmod_arg && pathspec.nr)
+		chmod_pathspec(&pathspec, chmod_arg[0]);
 	unplug_bulk_checkin();
 
 finish:
@@ -446,5 +515,7 @@ finish:
 			die(_("Unable to write new index file"));
 	}
 
+	UNLEAK(pathspec);
+	UNLEAK(dir);
 	return exit_status;
 }

@@ -39,7 +39,8 @@ even look at what the other tree contains at all.  It discards everything
 the other tree did, declaring 'our' history contains all that happened in it.
 
 theirs;;
-	This is the opposite of 'ours'.
+	This is the opposite of 'ours'; note that, unlike 'ours', there is
+	no 'theirs' merge stragegy to confuse this merge option with.
 
 patience;;
 	With this option, 'merge-recursive' spends a little extra time
@@ -81,9 +82,17 @@ no-renormalize;;
 	Disables the `renormalize` option.  This overrides the
 	`merge.renormalize` configuration variable.
 
+no-renames;;
+	Turn off rename detection.
+	See also linkgit:git-diff[1] `--no-renames`.
+
+find-renames[=<n>];;
+	Turn on rename detection, optionally setting the similarity
+	threshold.  This is the default.
+	See also linkgit:git-diff[1] `--find-renames`.
+
 rename-threshold=<n>;;
-	Controls the similarity threshold used for rename detection.
-	See also linkgit:git-diff[1] `-M`.
+	Deprecated synonym for `find-renames=<n>`.
 
 subtree[=<path>];;
 	This option is a more advanced form of 'subtree' strategy, where

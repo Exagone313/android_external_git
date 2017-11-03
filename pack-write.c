@@ -13,7 +13,7 @@ static int sha1_compare(const void *_a, const void *_b)
 {
 	struct pack_idx_entry *a = *(struct pack_idx_entry **)_a;
 	struct pack_idx_entry *b = *(struct pack_idx_entry **)_b;
-	return hashcmp(a->sha1, b->sha1);
+	return oidcmp(&a->oid, &b->oid);
 }
 
 static int cmp_uint32(const void *a_, const void *b_)
@@ -61,8 +61,7 @@ const char *write_idx_file(const char *index_name, struct pack_idx_entry **objec
 			if (objects[i]->offset > last_obj_offset)
 				last_obj_offset = objects[i]->offset;
 		}
-		qsort(sorted_by_sha, nr_objects, sizeof(sorted_by_sha[0]),
-		      sha1_compare);
+		QSORT(sorted_by_sha, nr_objects, sha1_compare);
 	}
 	else
 		sorted_by_sha = list = last = NULL;
@@ -72,15 +71,15 @@ const char *write_idx_file(const char *index_name, struct pack_idx_entry **objec
 		f = sha1fd_check(index_name);
 	} else {
 		if (!index_name) {
-			static char tmp_file[PATH_MAX];
-			fd = odb_mkstemp(tmp_file, sizeof(tmp_file), "pack/tmp_idx_XXXXXX");
-			index_name = xstrdup(tmp_file);
+			struct strbuf tmp_file = STRBUF_INIT;
+			fd = odb_mkstemp(&tmp_file, "pack/tmp_idx_XXXXXX");
+			index_name = strbuf_detach(&tmp_file, NULL);
 		} else {
 			unlink(index_name);
 			fd = open(index_name, O_CREAT|O_EXCL|O_WRONLY, 0600);
+			if (fd < 0)
+				die_errno("unable to create '%s'", index_name);
 		}
-		if (fd < 0)
-			die_errno("unable to create '%s'", index_name);
 		f = sha1fd(fd, index_name);
 	}
 
@@ -104,7 +103,7 @@ const char *write_idx_file(const char *index_name, struct pack_idx_entry **objec
 		struct pack_idx_entry **next = list;
 		while (next < last) {
 			struct pack_idx_entry *obj = *next;
-			if (obj->sha1[0] != i)
+			if (obj->oid.hash[0] != i)
 				break;
 			next++;
 		}
@@ -123,11 +122,11 @@ const char *write_idx_file(const char *index_name, struct pack_idx_entry **objec
 			uint32_t offset = htonl(obj->offset);
 			sha1write(f, &offset, 4);
 		}
-		sha1write(f, obj->sha1, 20);
+		sha1write(f, obj->oid.hash, 20);
 		if ((opts->flags & WRITE_IDX_STRICT) &&
-		    (i && !hashcmp(list[-2]->sha1, obj->sha1)))
+		    (i && !oidcmp(&list[-2]->oid, &obj->oid)))
 			die("The same object %s appears twice in the pack",
-			    sha1_to_hex(obj->sha1));
+			    oid_to_hex(&obj->oid));
 	}
 
 	if (index_version >= 2) {
@@ -214,14 +213,19 @@ void fixup_pack_header_footer(int pack_fd,
 	git_SHA_CTX old_sha1_ctx, new_sha1_ctx;
 	struct pack_header hdr;
 	char *buf;
+	ssize_t read_result;
 
 	git_SHA1_Init(&old_sha1_ctx);
 	git_SHA1_Init(&new_sha1_ctx);
 
 	if (lseek(pack_fd, 0, SEEK_SET) != 0)
 		die_errno("Failed seeking to start of '%s'", pack_name);
-	if (read_in_full(pack_fd, &hdr, sizeof(hdr)) != sizeof(hdr))
+	read_result = read_in_full(pack_fd, &hdr, sizeof(hdr));
+	if (read_result < 0)
 		die_errno("Unable to reread header of '%s'", pack_name);
+	else if (read_result != sizeof(hdr))
+		die_errno("Unexpected short read for header of '%s'",
+			  pack_name);
 	if (lseek(pack_fd, 0, SEEK_SET) != 0)
 		die_errno("Failed seeking to start of '%s'", pack_name);
 	git_SHA1_Update(&old_sha1_ctx, &hdr, sizeof(hdr));
@@ -288,13 +292,12 @@ char *index_pack_lockfile(int ip_out)
 	 * case, we need it to remove the corresponding .keep file
 	 * later on.  If we don't get that then tough luck with it.
 	 */
-	if (read_in_full(ip_out, packname, 46) == 46 && packname[45] == '\n' &&
-	    memcmp(packname, "keep\t", 5) == 0) {
-		char path[PATH_MAX];
+	if (read_in_full(ip_out, packname, 46) == 46 && packname[45] == '\n') {
+		const char *name;
 		packname[45] = 0;
-		snprintf(path, sizeof(path), "%s/pack/pack-%s.keep",
-			 get_object_directory(), packname + 5);
-		return xstrdup(path);
+		if (skip_prefix(packname, "keep\t", &name))
+			return xstrfmt("%s/pack/pack-%s.keep",
+				       get_object_directory(), name);
 	}
 	return NULL;
 }
@@ -306,7 +309,8 @@ char *index_pack_lockfile(int ip_out)
  *  - each byte afterwards: low seven bits are size continuation,
  *    with the high bit being "size continues"
  */
-int encode_in_pack_object_header(enum object_type type, uintmax_t size, unsigned char *hdr)
+int encode_in_pack_object_header(unsigned char *hdr, int hdr_len,
+				 enum object_type type, uintmax_t size)
 {
 	int n = 1;
 	unsigned char c;
@@ -317,6 +321,8 @@ int encode_in_pack_object_header(enum object_type type, uintmax_t size, unsigned
 	c = (type << 4) | (size & 15);
 	size >>= 4;
 	while (size) {
+		if (n == hdr_len)
+			die("object size is too enormous to format");
 		*hdr++ = c | 0x80;
 		c = size & 0x7f;
 		size >>= 7;
@@ -328,11 +334,11 @@ int encode_in_pack_object_header(enum object_type type, uintmax_t size, unsigned
 
 struct sha1file *create_tmp_packfile(char **pack_tmp_name)
 {
-	char tmpname[PATH_MAX];
+	struct strbuf tmpname = STRBUF_INIT;
 	int fd;
 
-	fd = odb_mkstemp(tmpname, sizeof(tmpname), "pack/tmp_pack_XXXXXX");
-	*pack_tmp_name = xstrdup(tmpname);
+	fd = odb_mkstemp(&tmpname, "pack/tmp_pack_XXXXXX");
+	*pack_tmp_name = strbuf_detach(&tmpname, NULL);
 	return sha1fd(fd, *pack_tmp_name);
 }
 
@@ -355,7 +361,6 @@ void finish_tmp_packfile(struct strbuf *name_buffer,
 		die_errno("unable to make temporary index file readable");
 
 	strbuf_addf(name_buffer, "%s.pack", sha1_to_hex(sha1));
-	free_pack_by_name(name_buffer->buf);
 
 	if (rename(pack_tmp_name, name_buffer->buf))
 		die_errno("unable to rename temporary pack file");

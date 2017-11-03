@@ -1,6 +1,6 @@
 /*
  *  LibXDiff by Davide Libenzi ( File Differential Library )
- *  Copyright (C) 2003-2009 Davide Libenzi, Johannes E. Schindelin
+ *  Copyright (C) 2003-2016 Davide Libenzi, Johannes E. Schindelin
  *
  *  This library is free software; you can redistribute it and/or
  *  modify it under the terms of the GNU Lesser General Public
@@ -166,7 +166,7 @@ static int binary_search(struct entry **sequence, int longest,
 	int left = -1, right = longest;
 
 	while (left + 1 < right) {
-		int middle = (left + right) / 2;
+		int middle = left + (right - left) / 2;
 		/* by construction, no two entries can be equal */
 		if (sequence[middle]->line2 > entry->line2)
 			right = middle;

@@ -185,4 +185,47 @@ test_expect_success 'stash save --all is stash poppable' '
 	test -s .gitignore
 '
 
+test_expect_success 'stash push --include-untracked with pathspec' '
+	>foo &&
+	>bar &&
+	git stash push --include-untracked -- foo &&
+	test_path_is_file bar &&
+	test_path_is_missing foo &&
+	git stash pop &&
+	test_path_is_file bar &&
+	test_path_is_file foo
+'
+
+test_expect_success 'stash push with $IFS character' '
+	>"foo bar" &&
+	>foo &&
+	>bar &&
+	git add foo* &&
+	git stash push --include-untracked -- "foo b*" &&
+	test_path_is_missing "foo bar" &&
+	test_path_is_file foo &&
+	test_path_is_file bar &&
+	git stash pop &&
+	test_path_is_file "foo bar" &&
+	test_path_is_file foo &&
+	test_path_is_file bar
+'
+
+cat > .gitignore <<EOF
+ignored
+ignored.d/*
+EOF
+
+test_expect_success 'stash previously ignored file' '
+	git reset HEAD &&
+	git add .gitignore &&
+	git commit -m "Add .gitignore" &&
+	>ignored.d/foo &&
+	echo "!ignored.d/foo" >> .gitignore &&
+	git stash save --include-untracked &&
+	test_path_is_missing ignored.d/foo &&
+	git stash pop &&
+	test_path_is_file ignored.d/foo
+'
+
 test_done

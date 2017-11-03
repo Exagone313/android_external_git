@@ -90,6 +90,16 @@ test_expect_success setup '
 	git commit -m "Rearranged lines in dir/sub" &&
 	git checkout master &&
 
+	GIT_AUTHOR_DATE="2006-06-26 00:06:00 +0000" &&
+	GIT_COMMITTER_DATE="2006-06-26 00:06:00 +0000" &&
+	export GIT_AUTHOR_DATE GIT_COMMITTER_DATE &&
+	git checkout -b mode initial &&
+	git update-index --chmod=+x file0 &&
+	git commit -m "update mode" &&
+	git checkout -f master &&
+
+	git config diff.renames false &&
+
 	git show-branch
 '
 
@@ -189,6 +199,10 @@ diff-tree --pretty=oneline --root --patch-with-raw initial
 diff-tree --pretty side
 diff-tree --pretty -p side
 diff-tree --pretty --patch-with-stat side
+
+diff-tree initial mode
+diff-tree --stat initial mode
+diff-tree --summary initial mode
 
 diff-tree master
 diff-tree -p master
@@ -304,9 +318,18 @@ diff --no-index --name-status dir2 dir
 diff --no-index --name-status -- dir2 dir
 diff --no-index dir dir3
 diff master master^ side
+# Can't use spaces...
+diff --line-prefix=abc master master^ side
 diff --dirstat master~1 master~2
 diff --dirstat initial rearrange
 diff --dirstat-by-file initial rearrange
+# No-index --abbrev and --no-abbrev
+diff --raw initial
+diff --raw --abbrev=4 initial
+diff --raw --no-abbrev initial
+diff --no-index --raw dir2 dir
+diff --no-index --raw --abbrev=4 dir2 dir
+diff --no-index --raw --no-abbrev dir2 dir
 EOF
 
 test_expect_success 'log -S requires an argument' '
@@ -322,6 +345,20 @@ test_expect_success 'diff --cached on unborn branch' '
 test_expect_success 'diff --cached -- file on unborn branch' '
 	git diff --cached -- file0 >result &&
 	test_cmp "$TEST_DIRECTORY/t4013/diff.diff_--cached_--_file0" result
+'
+test_expect_success 'diff --line-prefix with spaces' '
+	git diff --line-prefix="| | | " --cached -- file0 >result &&
+	test_cmp "$TEST_DIRECTORY/t4013/diff.diff_--line-prefix_--cached_--_file0" result
+'
+
+test_expect_success 'diff-tree --stdin with log formatting' '
+	cat >expect <<-\EOF &&
+	Side
+	Third
+	Second
+	EOF
+	git rev-list master | git diff-tree --stdin --format=%s -s >actual &&
+	test_cmp expect actual
 '
 
 test_done

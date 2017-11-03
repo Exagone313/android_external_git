@@ -4102,7 +4102,7 @@ extend_buffers (re_match_context_t *mctx)
   if (BE (INT_MAX / 2 / sizeof (re_dfastate_t *) <= pstr->bufs_len, 0))
     return REG_ESPACE;
 
-  /* Double the lengthes of the buffers.  */
+  /* Double the lengths of the buffers.  */
   ret = re_string_realloc_buffers (pstr, pstr->bufs_len * 2);
   if (BE (ret != REG_NOERROR, 0))
     return ret;
@@ -4284,7 +4284,7 @@ search_cur_bkref_entry (const re_match_context_t *mctx, int str_idx)
   last = right = mctx->nbkref_ents;
   for (left = 0; left < right;)
     {
-      mid = (left + right) / 2;
+      mid = left + (right - left) / 2;
       if (mctx->bkref_ents[mid].str_idx < str_idx)
 	left = mid + 1;
       else

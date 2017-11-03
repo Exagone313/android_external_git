@@ -9,11 +9,21 @@ cat >expected <<\EOF
 ?? actual
 ?? expected
 ?? untracked/
+!! untracked/ignored
 EOF
 
 test_expect_success 'status untracked directory with --ignored' '
 	echo "ignored" >.gitignore &&
 	mkdir untracked &&
+	: >untracked/ignored &&
+	: >untracked/uncommitted &&
+	git status --porcelain --ignored >actual &&
+	test_cmp expected actual
+'
+
+test_expect_success 'same with gitignore starting with BOM' '
+	printf "\357\273\277ignored\n" >.gitignore &&
+	mkdir -p untracked &&
 	: >untracked/ignored &&
 	: >untracked/uncommitted &&
 	git status --porcelain --ignored >actual &&

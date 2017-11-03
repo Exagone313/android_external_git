@@ -354,7 +354,7 @@ test_expect_failure 'combine diff coalesce three parents' '
 '
 
 # Test for a bug reported at
-# http://thread.gmane.org/gmane.comp.version-control.git/224410
+# https://public-inbox.org/git/20130515143508.GO25742@login.drsnuggles.stderr.nl/
 # where a delete lines were missing from combined diff output when they
 # occurred exactly before the context lines of a later change.
 test_expect_success 'combine diff missing delete bug' '
@@ -399,6 +399,40 @@ test_expect_success 'combine diff missing delete bug' '
 	 +4modified
 	EOF
 	compare_diff_patch expected actual
+'
+
+test_expect_success 'combine diff gets tree sorting right' '
+	# create a directory and a file that sort differently in trees
+	# versus byte-wise (implied "/" sorts after ".")
+	git checkout -f master &&
+	mkdir foo &&
+	echo base >foo/one &&
+	echo base >foo/two &&
+	echo base >foo.ext &&
+	git add foo foo.ext &&
+	git commit -m base &&
+
+	# one side modifies a file in the directory, along with the root
+	# file...
+	echo master >foo/one &&
+	echo master >foo.ext &&
+	git commit -a -m master &&
+
+	# the other side modifies the other file in the directory
+	git checkout -b other HEAD^ &&
+	echo other >foo/two &&
+	git commit -a -m other &&
+
+	# And now we merge. The files in the subdirectory will resolve cleanly,
+	# meaning that a combined diff will not find them interesting. But it
+	# will find the tree itself interesting, because it had to be merged.
+	git checkout master &&
+	git merge other &&
+
+	printf "MM\tfoo\n" >expect &&
+	git diff-tree -c --name-status -t HEAD >actual.tmp &&
+	sed 1d <actual.tmp >actual &&
+	test_cmp expect actual
 '
 
 test_done

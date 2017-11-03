@@ -19,7 +19,7 @@ static void flush(struct sha1file *f, const void *buf, unsigned int count)
 
 		if (ret < 0)
 			die_errno("%s: sha1 file read error", f->name);
-		if (ret < count)
+		if (ret != count)
 			die("%s: sha1 file truncated", f->name);
 		if (memcmp(buf, check_buffer, count))
 			die("sha1 file '%s' validation error", f->name);
@@ -130,14 +130,10 @@ struct sha1file *sha1fd_check(const char *name)
 
 	sink = open("/dev/null", O_WRONLY);
 	if (sink < 0)
-		return NULL;
+		die_errno("unable to open /dev/null");
 	check = open(name, O_RDONLY);
-	if (check < 0) {
-		int saved_errno = errno;
-		close(sink);
-		errno = saved_errno;
-		return NULL;
-	}
+	if (check < 0)
+		die_errno("unable to open '%s'", name);
 	f = sha1fd(sink, name);
 	f->check_fd = check;
 	return f;

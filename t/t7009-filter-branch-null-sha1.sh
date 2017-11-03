@@ -13,7 +13,7 @@ test_expect_success 'setup: a commit with a bogus null sha1 in the tree' '
 	{
 		git ls-tree HEAD &&
 		printf "160000 commit $_z40\\tbroken\\n"
-	} >broken-tree
+	} >broken-tree &&
 	echo "add broken entry" >msg &&
 
 	tree=$(git mktree <broken-tree) &&
@@ -29,6 +29,12 @@ test_expect_success 'setup: a commit with a bogus null sha1 in the tree' '
 test_expect_success 'setup: bring HEAD and index in sync' '
 	test_tick &&
 	git commit -a -m "back to normal"
+'
+
+test_expect_success 'noop filter-branch complains' '
+	test_must_fail git filter-branch \
+		--force --prune-empty \
+		--index-filter "true"
 '
 
 test_expect_success 'filter commands are still checked' '

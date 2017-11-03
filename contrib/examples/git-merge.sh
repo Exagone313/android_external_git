@@ -399,7 +399,7 @@ case "$allow_fast_forward,$#,$common,$no_commit" in
 ?,1,"$1",*)
 	# If head can reach all the merge then we are up to date.
 	# but first the most common case of merging one remote.
-	finish_up_to_date "Already up-to-date."
+	finish_up_to_date "Already up to date."
 	exit 0
 	;;
 t,1,"$head",*)
@@ -459,7 +459,7 @@ t,1,"$head",*)
 	done
 	if test "$up_to_date" = t
 	then
-		finish_up_to_date "Already up-to-date. Yeeah!"
+		finish_up_to_date "Already up to date. Yeeah!"
 		exit 0
 	fi
 	;;
@@ -523,10 +523,10 @@ do
 
 	if test "$exit" -eq 1
 	then
-	    cnt=`{
+	    cnt=$({
 		git diff-files --name-only
 		git ls-files --unmerged
-	    } | wc -l`
+	    } | wc -l)
 	    if test $best_cnt -le 0 || test $cnt -le $best_cnt
 	    then
 		best_strategy=$strategy

@@ -18,8 +18,8 @@ struct object_array {
 		 * empty string.
 		 */
 		char *name;
+		char *path;
 		unsigned mode;
-		struct object_context *context;
 	} *objects;
 };
 
@@ -29,15 +29,16 @@ struct object_array {
 /*
  * object flag allocation:
  * revision.h:      0---------10                                26
- * fetch-pack.c:    0---4
+ * fetch-pack.c:    0---5
  * walker.c:        0-2
- * upload-pack.c:               11----------------19
+ * upload-pack.c:       4       11----------------19
  * builtin/blame.c:               12-13
  * bisect.c:                               16
  * bundle.c:                               16
  * http-push.c:                            16-----19
  * commit.c:                               16-----19
  * sha1_name.c:                                     20
+ * builtin/fsck.c:  0--3
  */
 #define FLAG_BITS  27
 
@@ -46,14 +47,14 @@ struct object_array {
  */
 struct object {
 	unsigned parsed : 1;
-	unsigned used : 1;
 	unsigned type : TYPE_BITS;
 	unsigned flags : FLAG_BITS;
-	unsigned char sha1[20];
+	struct object_id oid;
 };
 
 extern const char *typename(unsigned int type);
-extern int type_from_string(const char *str);
+extern int type_from_string_gently(const char *str, ssize_t, int gentle);
+#define type_from_string(str) type_from_string_gently(str, -1, 0)
 
 /*
  * Return the current number of buckets in the object hashmap.
@@ -88,20 +89,20 @@ void *object_as_type(struct object *obj, enum object_type type, int quiet);
  *
  * Returns NULL if the object is missing or corrupt.
  */
-struct object *parse_object(const unsigned char *sha1);
+struct object *parse_object(const struct object_id *oid);
 
 /*
  * Like parse_object, but will die() instead of returning NULL. If the
  * "name" parameter is not NULL, it is included in the error message
- * (otherwise, the sha1 hex is given).
+ * (otherwise, the hex object ID is given).
  */
-struct object *parse_object_or_die(const unsigned char *sha1, const char *name);
+struct object *parse_object_or_die(const struct object_id *oid, const char *name);
 
 /* Given the result of read_sha1_file(), returns the object after
  * parsing it.  eaten_p indicates if the object has a borrowed copy
  * of buffer and the caller should not free() it.
  */
-struct object *parse_object_buffer(const unsigned char *sha1, enum object_type type, unsigned long size, void *buffer, int *eaten_p);
+struct object *parse_object_buffer(const struct object_id *oid, enum object_type type, unsigned long size, void *buffer, int *eaten_p);
 
 /** Returns the object, with potentially excess memory allocated. **/
 struct object *lookup_unknown_object(const unsigned  char *sha1);
@@ -113,8 +114,15 @@ int object_list_contains(struct object_list *list, struct object *obj);
 
 /* Object array handling .. */
 void add_object_array(struct object *obj, const char *name, struct object_array *array);
-void add_object_array_with_mode(struct object *obj, const char *name, struct object_array *array, unsigned mode);
-void add_object_array_with_context(struct object *obj, const char *name, struct object_array *array, struct object_context *context);
+void add_object_array_with_path(struct object *obj, const char *name, struct object_array *array, unsigned mode, const char *path);
+
+/*
+ * Returns NULL if the array is empty. Otherwise, returns the last object
+ * after removing its entry from the array. Other resources associated
+ * with that object are left in an unspecified state and should not be
+ * examined.
+ */
+struct object *object_array_pop(struct object_array *array);
 
 typedef int (*object_array_each_func_t)(struct object_array_entry *, void *);
 
@@ -131,6 +139,12 @@ void object_array_filter(struct object_array *array,
  * Warning: this function uses an O(N^2) algorithm.
  */
 void object_array_remove_duplicates(struct object_array *array);
+
+/*
+ * Remove any objects from the array, freeing all used memory; afterwards
+ * the array is ready to store more objects with add_object_array().
+ */
+void object_array_clear(struct object_array *array);
 
 void clear_object_flags(unsigned flags);
 

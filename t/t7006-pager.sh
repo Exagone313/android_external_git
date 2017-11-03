@@ -49,6 +49,19 @@ test_expect_success TTY 'LESS and LV envvars are set for pagination' '
 	grep ^LV= pager-env.out
 '
 
+test_expect_success !MINGW,TTY 'LESS and LV envvars set by git-sh-setup' '
+	(
+		sane_unset LESS LV &&
+		PAGER="env >pager-env.out; wc" &&
+		export PAGER &&
+		PATH="$(git --exec-path):$PATH" &&
+		export PATH &&
+		test_terminal sh -c ". git-sh-setup && git_pager"
+	) &&
+	grep ^LESS= pager-env.out &&
+	grep ^LV= pager-env.out
+'
+
 test_expect_success TTY 'some commands do not use a pager' '
 	rm -f paginated.out &&
 	test_terminal git rev-list HEAD &&
@@ -121,6 +134,86 @@ test_expect_success TTY 'configuration can enable pager (from subdir)' '
 	}
 '
 
+test_expect_success TTY 'git tag -l defaults to paging' '
+	rm -f paginated.out &&
+	test_terminal git tag -l &&
+	test -e paginated.out
+'
+
+test_expect_success TTY 'git tag -l respects pager.tag' '
+	rm -f paginated.out &&
+	test_terminal git -c pager.tag=false tag -l &&
+	! test -e paginated.out
+'
+
+test_expect_success TTY 'git tag -l respects --no-pager' '
+	rm -f paginated.out &&
+	test_terminal git -c pager.tag --no-pager tag -l &&
+	! test -e paginated.out
+'
+
+test_expect_success TTY 'git tag with no args defaults to paging' '
+	# no args implies -l so this should page like -l
+	rm -f paginated.out &&
+	test_terminal git tag &&
+	test -e paginated.out
+'
+
+test_expect_success TTY 'git tag with no args respects pager.tag' '
+	# no args implies -l so this should page like -l
+	rm -f paginated.out &&
+	test_terminal git -c pager.tag=false tag &&
+	! test -e paginated.out
+'
+
+test_expect_success TTY 'git tag --contains defaults to paging' '
+	# --contains implies -l so this should page like -l
+	rm -f paginated.out &&
+	test_terminal git tag --contains &&
+	test -e paginated.out
+'
+
+test_expect_success TTY 'git tag --contains respects pager.tag' '
+	# --contains implies -l so this should page like -l
+	rm -f paginated.out &&
+	test_terminal git -c pager.tag=false tag --contains &&
+	! test -e paginated.out
+'
+
+test_expect_success TTY 'git tag -a defaults to not paging' '
+	test_when_finished "git tag -d newtag" &&
+	rm -f paginated.out &&
+	test_terminal git tag -am message newtag &&
+	! test -e paginated.out
+'
+
+test_expect_success TTY 'git tag -a ignores pager.tag' '
+	test_when_finished "git tag -d newtag" &&
+	rm -f paginated.out &&
+	test_terminal git -c pager.tag tag -am message newtag &&
+	! test -e paginated.out
+'
+
+test_expect_success TTY 'git tag -a respects --paginate' '
+	test_when_finished "git tag -d newtag" &&
+	rm -f paginated.out &&
+	test_terminal git --paginate tag -am message newtag &&
+	test -e paginated.out
+'
+
+test_expect_success TTY 'git tag as alias ignores pager.tag with -a' '
+	test_when_finished "git tag -d newtag" &&
+	rm -f paginated.out &&
+	test_terminal git -c pager.tag -c alias.t=tag t -am message newtag &&
+	! test -e paginated.out
+'
+
+test_expect_success TTY 'git tag as alias respects pager.tag with -l' '
+	rm -f paginated.out &&
+	test_terminal git -c pager.tag=false -c alias.t=tag t -l &&
+	! test -e paginated.out
+'
+
 # A colored commit log will begin with an appropriate ANSI escape
 # for the first color; the text "commit" comes later.
 colorful() {
@@ -146,7 +239,7 @@ test_expect_success 'no color when stdout is a regular file' '
 test_expect_success TTY 'color when writing to a pager' '
 	rm -f paginated.out &&
 	test_config color.ui auto &&
-	test_terminal env TERM=vt100 git log &&
+	test_terminal git log &&
 	colorful paginated.out
 '
 
@@ -154,7 +247,7 @@ test_expect_success TTY 'colors are suppressed by color.pager' '
 	rm -f paginated.out &&
 	test_config color.ui auto &&
 	test_config color.pager false &&
-	test_terminal env TERM=vt100 git log &&
+	test_terminal git log &&
 	! colorful paginated.out
 '
 
@@ -173,7 +266,7 @@ test_expect_success 'color when writing to a file intended for a pager' '
 test_expect_success TTY 'colors are sent to pager for external commands' '
 	test_config alias.externallog "!git log" &&
 	test_config color.ui auto &&
-	test_terminal env TERM=vt100 git -p externallog &&
+	test_terminal git -p externallog &&
 	colorful paginated.out
 '
 
@@ -347,26 +440,47 @@ test_pager_choices                       'git aliasedlog'
 test_default_pager        expect_success 'git -p aliasedlog'
 test_PAGER_overrides      expect_success 'git -p aliasedlog'
 test_core_pager_overrides expect_success 'git -p aliasedlog'
-test_core_pager_subdir    expect_failure 'git -p aliasedlog'
+test_core_pager_subdir    expect_success 'git -p aliasedlog'
 test_GIT_PAGER_overrides  expect_success 'git -p aliasedlog'
 
 test_default_pager        expect_success 'git -p true'
 test_PAGER_overrides      expect_success 'git -p true'
 test_core_pager_overrides expect_success 'git -p true'
-test_core_pager_subdir    expect_failure 'git -p true'
+test_core_pager_subdir    expect_success 'git -p true'
 test_GIT_PAGER_overrides  expect_success 'git -p true'
 
 test_default_pager        expect_success test_must_fail 'git -p request-pull'
 test_PAGER_overrides      expect_success test_must_fail 'git -p request-pull'
 test_core_pager_overrides expect_success test_must_fail 'git -p request-pull'
-test_core_pager_subdir    expect_failure test_must_fail 'git -p request-pull'
+test_core_pager_subdir    expect_success test_must_fail 'git -p request-pull'
 test_GIT_PAGER_overrides  expect_success test_must_fail 'git -p request-pull'
 
 test_default_pager        expect_success test_must_fail 'git -p'
 test_PAGER_overrides      expect_success test_must_fail 'git -p'
 test_local_config_ignored expect_failure test_must_fail 'git -p'
-test_no_local_config_subdir expect_success test_must_fail 'git -p'
 test_GIT_PAGER_overrides  expect_success test_must_fail 'git -p'
+
+test_expect_success TTY 'core.pager in repo config works and retains cwd' '
+	sane_unset GIT_PAGER &&
+	test_config core.pager "cat >cwd-retained" &&
+	(
+		cd sub &&
+		rm -f cwd-retained &&
+		test_terminal git -p rev-parse HEAD &&
+		test_path_is_file cwd-retained
+	)
+'
+
+test_expect_success TTY 'core.pager is found via alias in subdirectory' '
+	sane_unset GIT_PAGER &&
+	test_config core.pager "cat >via-alias" &&
+	(
+		cd sub &&
+		rm -f via-alias &&
+		test_terminal git -c alias.r="-p rev-parse" r HEAD &&
+		test_path_is_file via-alias
+	)
+'
 
 test_doesnt_paginate      expect_failure test_must_fail 'git -p nonsense'
 
@@ -396,7 +510,7 @@ test_expect_success TTY 'command-specific pager overrides core.pager' '
 	sane_unset PAGER GIT_PAGER &&
 	echo "foo:initial" >expect &&
 	>actual &&
-	test_config core.pager "exit 1"
+	test_config core.pager "exit 1" &&
 	test_config pager.log "sed s/^/foo:/ >actual" &&
 	test_terminal git log --format=%s -1 &&
 	test_cmp expect actual
@@ -424,7 +538,7 @@ test_expect_success TTY 'command-specific pager works for external commands' '
 	echo "foo:initial" >expect &&
 	>actual &&
 	test_config pager.external "sed s/^/foo:/ >actual" &&
-	test_terminal git --exec-path="`pwd`" external log --format=%s -1 &&
+	test_terminal git --exec-path="$(pwd)" external log --format=%s -1 &&
 	test_cmp expect actual
 '
 
@@ -444,6 +558,15 @@ test_expect_success TTY 'external command pagers override sub-commands' '
 	test_config pager.external false &&
 	test_config pager.log "sed s/^/log:/ >actual" &&
 	test_terminal git --exec-path=. external log --format=%s -1 &&
+	test_cmp expect actual
+'
+
+test_expect_success 'command with underscores does not complain' '
+	write_script git-under_score <<-\EOF &&
+	echo ok
+	EOF
+	git --exec-path=. under_score >actual 2>&1 &&
+	echo ok >expect &&
 	test_cmp expect actual
 '
 
